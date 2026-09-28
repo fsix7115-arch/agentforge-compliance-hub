@@ -1,0 +1,25 @@
+node_modules
+.next
+out
+build
+dist
+coverage
+test-results
+playwright-report
+.DS_Store
+*.tsbuildinfo
+next-env.d.ts
+
+# env
+.env
+.env.local
+.env*.local
+
+# database
+*.db
+*.db-journal
+prisma/*.db
+
+# local infra
+docker-data/
+

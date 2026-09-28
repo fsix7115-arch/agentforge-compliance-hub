@@ -1,0 +1,306 @@
+// AgentForge Compliance Hub — data model
+//
+// SQLite note: the Prisma SQLite connector does not support native enums, and
+// `npm run dev` must work with zero infrastructure. Enum-like fields are
+// therefore stored as String with a documented value set, and the Zod layer in
+// `src/lib/schemas.ts` is the single source of truth for allowed values.
+// Switching to Postgres later is a `provider` change plus optional native
+// enums — no application code depends on the storage representation.
+//
+// The hash chain on AgentAction is what makes the audit trail tamper-evident:
+// each row stores hash = sha256(previousHash | canonicalActionData).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// Values: FREE | PRO | ENTERPRISE
+model Organization {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  plan      String   @default("FREE")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  members  User[]
+  agents   Agent[]
+  policies Policy[]
+  budgets  CostBudget[]
+  packs    MarketplaceInstall[]
+
+  @@index([slug])
+}
+
+// role: ADMIN | AUDITOR | DEVELOPER | VIEWER
+model User {
+  id             String   @id @default(cuid())
+  email          String   @unique
+  name           String
+  passwordHash   String
+  role           String   @default("VIEWER")
+  organizationId String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization      Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  ownedAgents       Agent[]           @relation("AgentOwner")
+  approvalRequests  ApprovalRequest[] @relation("ApprovalRequester")
+  approvalDecisions ApprovalRequest[] @relation("ApprovalApprover")
+
+  @@index([organizationId])
+}
+
+// status: DRAFT | STAGING | PRODUCTION | DEPRECATED
+// tags: JSON string[]   config: JSON object
+model Agent {
+  id             String   @id @default(cuid())
+  name           String
+  slug           String
+  description    String   @default("")
+  version        String   @default("0.1.0")
+  status         String   @default("DRAFT")
+  tags           String   @default("[]")
+  config         String   @default("{}")
+  ownerId        String
+  organizationId String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  owner        User             @relation("AgentOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  actions      AgentAction[]
+  dependencies AgentDep[]       @relation("AgentDependencies")
+  dependents   AgentDep[]       @relation("AgentDependents")
+  budgets      CostBudget[]
+  evaluations  Evaluation[]
+  policies     AgentPolicy[]
+  approvals    ApprovalRequest[]
+
+  @@unique([organizationId, slug])
+  @@index([organizationId, status])
+  @@index([ownerId])
+}
+
+model AgentDep {
+  id        String @id @default(cuid())
+  agentId   String
+  dependsOn String
+
+  agent  Agent @relation("AgentDependencies", fields: [agentId], references: [id], onDelete: Cascade)
+  target Agent @relation("AgentDependents", fields: [dependsOn], references: [id], onDelete: Cascade)
+
+  @@unique([agentId, dependsOn])
+  @@index([agentId])
+}
+
+// The immutable audit record. Append-only by convention and by the hash chain:
+// mutating or deleting any row breaks every subsequent hash.
+model AgentAction {
+  id           String   @id @default(cuid())
+  agentId      String
+  actionType   String
+  input        String   @default("{}")
+  output       String   @default("{}")
+  status       String   @default("SUCCESS")
+  latencyMs    Int      @default(0)
+  tokenCost    Float    @default(0)
+  inputTokens  Int      @default(0)
+  outputTokens Int      @default(0)
+  model        String   @default("")
+  policyChecks String   @default("[]")
+  hash         String
+  previousHash String
+  sequence     Int
+  actor        String   @default("agent")
+  createdAt    DateTime @default(now())
+
+  agent     Agent                @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  policies  PolicyEvaluation[]
+  approvals ApprovalRequest[]
+
+  @@unique([agentId, sequence])
+  @@index([agentId, createdAt])
+  @@index([status])
+  @@index([createdAt])
+}
+
+// framework: GDPR | HIPAA | SOC2 | PCI_DSS | CUSTOM
+model Policy {
+  id             String   @id @default(cuid())
+  name           String
+  description    String   @default("")
+  framework      String   @default("CUSTOM")
+  rulesYaml      String
+  enabled        Boolean  @default(true)
+  organizationId String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  evaluations  PolicyEvaluation[]
+  agents       AgentPolicy[]
+
+  @@index([organizationId, framework])
+}
+
+model PolicyEvaluation {
+  id         String   @id @default(cuid())
+  actionId   String
+  policyId   String
+  passed     Boolean
+  violations String   @default("[]")
+  createdAt  DateTime @default(now())
+
+  action AgentAction @relation(fields: [actionId], references: [id], onDelete: Cascade)
+  policy Policy       @relation(fields: [policyId], references: [id], onDelete: Cascade)
+
+  @@index([actionId])
+  @@index([policyId, passed])
+}
+
+model AgentPolicy {
+  agentId  String
+  policyId String
+
+  agent  Agent  @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  policy Policy @relation(fields: [policyId], references: [id], onDelete: Cascade)
+
+  @@id([agentId, policyId])
+  @@index([policyId])
+}
+
+model CostBudget {
+  id             String   @id @default(cuid())
+  organizationId String
+  agentId        String?
+  label          String
+  monthlyLimit   Float
+  currentSpend   Float    @default(0)
+  alertThreshold Float    @default(0.8)
+  autoThrottle   Boolean  @default(false)
+  periodStart    DateTime @default(now())
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  agent        Agent?       @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  alerts       CostAlert[]
+
+  @@index([organizationId])
+  @@index([agentId])
+}
+
+model CostAlert {
+  id        String   @id @default(cuid())
+  budgetId  String
+  level     String
+  spend     Float
+  limit     Float
+  notified  Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  budget CostBudget @relation(fields: [budgetId], references: [id], onDelete: Cascade)
+
+  @@index([budgetId, createdAt])
+}
+
+model CostAggregate {
+  id             String   @id @default(cuid())
+  organizationId String
+  agentId        String?
+  model          String   @default("")
+  period         String
+  totalCost      Float    @default(0)
+  totalTokens    Int      @default(0)
+  actionCount    Int      @default(0)
+  createdAt      DateTime @default(now())
+
+  @@unique([organizationId, agentId, model, period])
+  @@index([organizationId, period])
+}
+
+model Evaluation {
+  id         String   @id @default(cuid())
+  agentId    String
+  metric     String
+  value      Float
+  sampleSize Int      @default(0)
+  period     String
+  createdAt  DateTime @default(now())
+
+  agent Agent @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  @@unique([agentId, metric, period])
+  @@index([agentId, metric])
+}
+
+// status: PENDING | APPROVED | REJECTED | EXPIRED
+model ApprovalRequest {
+  id           String   @id @default(cuid())
+  actionId     String
+  agentId      String
+  reason       String
+  riskScore    Float    @default(0)
+  status       String   @default("PENDING")
+  requestedBy  String
+  approvedBy   String?
+  decisionNote String?
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+  decidedAt    DateTime?
+
+  action    AgentAction @relation(fields: [actionId], references: [id], onDelete: Cascade)
+  agent     Agent       @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  requester User        @relation("ApprovalRequester", fields: [requestedBy], references: [id], onDelete: Cascade)
+  approver  User?       @relation("ApprovalApprover", fields: [approvedBy], references: [id], onDelete: SetNull)
+
+  @@index([status, createdAt])
+  @@index([agentId])
+}
+
+model MarketplacePack {
+  id           String   @id @default(cuid())
+  slug         String   @unique
+  name         String
+  description  String
+  framework    String
+  version      String   @default("1.0.0")
+  priceCents   Int      @default(0)
+  policiesYaml String
+  installs     Int      @default(0)
+  createdAt    DateTime @default(now())
+
+  installsByOrg MarketplaceInstall[]
+}
+
+model MarketplaceTemplate {
+  id          String   @id @default(cuid())
+  slug        String   @unique
+  name        String
+  description String
+  category    String
+  version     String   @default("1.0.0")
+  priceCents  Int      @default(0)
+  configJson  String
+  installs    Int      @default(0)
+  createdAt   DateTime @default(now())
+}
+
+model MarketplaceInstall {
+  id             String   @id @default(cuid())
+  organizationId String
+  packId         String
+  installedBy    String
+  createdAt      DateTime @default(now())
+
+  organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  pack         MarketplacePack @relation(fields: [packId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, packId])
+}
