@@ -1,5 +1,11 @@
 # AgentForge Compliance Hub
 
+[![CI](https://github.com/fsix7115-arch/agentforge-compliance-hub/actions/workflows/ci.yml/badge.svg)](https://github.com/fsix7115-arch/agentforge-compliance-hub/actions/workflows/ci.yml)
+[![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![Next.js](https://img.shields.io/badge/Next.js-14-000000?logo=nextdotjs&logoColor=white)](https://nextjs.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
+
 **Open-source compliance, governance and audit platform for AI agent fleets.**
 
 Register your agents, govern every action with YAML policies, keep a tamper-evident
