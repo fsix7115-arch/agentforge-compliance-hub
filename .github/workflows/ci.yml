@@ -64,6 +64,8 @@ jobs:
           npx prisma generate
           npx prisma db push --skip-generate
           npx tsx prisma/seed.ts
+        env:
+          DATABASE_URL: file:./dev.db
 
       - name: Cache Playwright browsers
         uses: actions/cache@v4
